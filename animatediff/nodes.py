@@ -20,7 +20,7 @@ from comfy.utils import load_torch_file, calculate_parameters
 from comfy.sd import load_checkpoint_guess_config
 from comfy.model_patcher import ModelPatcher
 from .logger import logger
-from .motion_module import MotionWrapper, VanillaTemporalModule
+from .motion_module import MotionWrapper, VanillaTemporalModule, convert_mm_state_dict
 from .model_utils import Folders, get_available_models, get_full_path, BetaSchedules
 
 #############################################
@@ -85,9 +85,13 @@ def groupnorm_mm_factory(params: InjectionParams):
         else:
             axes_factor = params.axes_factor if input.size()[0]%params.axes_factor==0 else 1
         
+        #print(f"$$$$ groupnorm input before rearrange: {input.shape}")
         input = rearrange(input, "(b f) c h w -> b c f h w", b=axes_factor)
+        #input = rearrange(input, "(b f) c h w -> b f c h w", b=axes_factor)
+        #print(f"$$$$ groupnorm input after rearrange: {input.shape}")
         input = group_norm(input, self.num_groups, self.weight, self.bias, self.eps)
         input = rearrange(input, "b c f h w -> (b f) c h w", b=axes_factor)
+        #input = rearrange(input, "b f c h w -> (b f) c h w", b=axes_factor)
         return input
     return groupnorm_mm_forward
 
@@ -133,6 +137,10 @@ def load_motion_module(model_name: str):
 
     logger.info(f"Loading motion module {model_name}")
     mm_state_dict = load_torch_file(model_path)
+    convert_mm_state_dict(mm_state_dict)
+    # with open(r"F:\ComfyUI\custom_nodes\mm_keys.txt", "w") as model_keys:
+    #     for key in mm_state_dict.keys():
+    #         model_keys.write(f"{key}\n")
     motion_module = MotionWrapper(model_name)
 
     parameters = calculate_parameters(mm_state_dict, "")

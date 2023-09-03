@@ -1,5 +1,5 @@
 import torch
-from torch import Tensor, nn
+from torch import nn
 
 import math
 from einops import rearrange, repeat
@@ -12,39 +12,6 @@ def zero_module(module):
     for p in module.parameters():
         p.detach().zero_()
     return module
-
-
-def convert_mm_state_dict(mm_state_dict: dict[str, Tensor]) -> None:
-    def rearrange_key(key):
-        mm_state_dict[key] = rearrange(mm_state_dict[key], "a b -> b a")
-    # change all pos_encoder.pe shapes from [1, 24, channels] to [24, 1, channels]
-    for key in mm_state_dict.keys():
-        if key.endswith("pos_encoder.pe"):
-            print(f"$$$$ pos_encoder.pe before rearrange: {mm_state_dict[key].shape}")
-            mm_state_dict[key] = rearrange(mm_state_dict[key], "d f c -> f d c")
-            print(f"$$$$ pos_encoder.pe after rearrange: {mm_state_dict[key].shape}")
-    # for all attention blocks, switch to_q with to_k
-    sorted_all_to_q = sorted([key for key in mm_state_dict.keys() if key.endswith("to_q.weight")])
-    #sorted_all_to_k = sorted([key for key in mm_state_dict.keys() if key.endswith("to_k.weight")])
-    for to_q_key in sorted_all_to_q:
-        base_key = to_q_key.split("to_q.weight")[0]
-        print(f"base_key: {base_key}")
-        to_k_key = base_key + "to_k.weight"
-        to_v_key = base_key + "to_v.weight"
-        to_out_weight = base_key + "to_out.0.weight"
-        to_out_bias = base_key + "to_out.0.bias"
-        # rearrange values that have two dims
-        #rearrange_key(to_q_key)
-        #rearrange_key(to_k_key)
-        #rearrange_key(to_v_key)
-        #rearrange_key(to_out_weight)
-        # reverse bias
-        # mm_state_dict[to_out_bias] = torch.flip(mm_state_dict[to_out_bias], dims=(0,))
-
-    # for to_q, to_k in zip(sorted_all_to_q, sorted_all_to_k):
-    #     q_rearranged = rearrange(mm_state_dict[to_q], "a b -> b a")
-    #     k_rearranged = rearrange(mm_state_dict[to_k], "a b -> b a")
-    #     mm_state_dict[to_q], mm_state_dict[to_k] = k_rearranged, q_rearranged
 
 
 class MotionWrapper(nn.Module):
@@ -310,18 +277,18 @@ class PositionalEncoding(nn.Module):
         div_term = torch.exp(
             torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
         )
-        # pe = torch.zeros(1, max_len, d_model)
-        # pe[0, :, 0::2] = torch.sin(position * div_term)
-        # pe[0, :, 1::2] = torch.cos(position * div_term)
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        # pe = torch.zeros(max_len, 1, d_model)
+        # pe[:, 0, 0::2] = torch.sin(position * div_term)
+        # pe[:, 0, 1::2] = torch.cos(position * div_term)
         self.register_buffer("pe", pe)
 
     def forward(self, x):
         print(f"$$PE self.pe shape: {self.pe.shape} $$$$")
-        x = x + self.pe[: x.size(0), :]
-        #x = x + self.pe[:, : x.size(1)]
+        #x = x + self.pe[: x.size(0), :]
+        x = x + self.pe[:, : x.size(1)]
         return self.dropout(x)
 
 
@@ -369,13 +336,12 @@ class VersatileAttention(CrossAttention):
         print(f"$$$$ hidden_states before rearranged: {hidden_states.shape}")
 
         d = hidden_states.shape[1]
-        # hidden_states = rearrange(
-        #     hidden_states, "(b f) d c -> (b d) f c", f=video_length
-        # )
-
         hidden_states = rearrange(
-            hidden_states, "(b f) d c -> f (b d) c", f=video_length
+            hidden_states, "(b f) d c -> (b d) f c", f=video_length
         )
+        # hidden_states = rearrange(
+        #     hidden_states, "(b f) d c -> f (b d) c", f=video_length
+        # )
 
         print(f"$$$$ hidden_states after rearranged: {hidden_states.shape}")
 
@@ -388,14 +354,10 @@ class VersatileAttention(CrossAttention):
         #     hidden_states, "b f c -> f b c"
         # )
 
-        # hidden_states = rearrange(
-        #     hidden_states, "f n c -> n f c", f=video_length
-        # )
-
         if encoder_hidden_states is not None: print(f"$$$$ encoder_hidden states before rearranged: {encoder_hidden_states.shape}")
 
         encoder_hidden_states = (
-            repeat(encoder_hidden_states, "b n c -> (b d) n c", d=d) # TODO: adapt this as well?
+            repeat(encoder_hidden_states, "b n c -> (b d) n c", d=d)
             if encoder_hidden_states is not None
             else encoder_hidden_states
         )
@@ -410,10 +372,10 @@ class VersatileAttention(CrossAttention):
             mask=attention_mask,
         )
 
-        #hidden_states = rearrange(hidden_states, "(b d) f c -> (b f) d c", d=d) # original
+        hidden_states = rearrange(hidden_states, "(b d) f c -> (b f) d c", d=d) # original
 
 
-        hidden_states = rearrange(hidden_states, "f (b d) c -> (b f) d c", d=d)
+        # hidden_states = rearrange(hidden_states, "f (b d) c -> (b f) d c", d=d)
         print(f"$$$$ hidden_states after Versatile attention stuff complete: {hidden_states.shape}")
 
         return hidden_states
