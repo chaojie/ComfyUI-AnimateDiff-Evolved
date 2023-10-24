@@ -65,6 +65,9 @@ class BetaScheduleCache:
         model.model.register_schedule(given_betas=self.betas.clone().detach(), linear_start=self.linear_start, linear_end=self.linear_end)
         self.clean()
 
+    def use_cached_beta_schedule(self, model: ModelPatcher):
+        model.model.register_schedule(given_betas=self.betas.clone().detach(), linear_start=self.linear_start, linear_end=self.linear_end)
+
     def clean(self):
         self.betas = None
         self.linear_start = None

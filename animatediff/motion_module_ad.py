@@ -1,3 +1,4 @@
+from typing import Iterable, Union
 import torch
 from torch import Tensor, nn
 
@@ -37,9 +38,9 @@ def has_mid_block(mm_state_dict: dict[str, Tensor]):
 class AnimDiffMotionWrapper(GenericMotionWrapper):
     def __init__(self, mm_state_dict: dict[str, Tensor], mm_hash: str, mm_name: str="mm_sd_v15.ckpt" , loras: list[MotionLoRAInfo]=None):
         super().__init__(mm_hash, mm_name, loras)
-        self.down_blocks = nn.ModuleList([])
-        self.up_blocks = nn.ModuleList([])
-        self.mid_block = None
+        self.down_blocks: Iterable[VanillaTemporalModule] = nn.ModuleList([])
+        self.up_blocks: Iterable[VanillaTemporalModule] = nn.ModuleList([])
+        self.mid_block: Union[VanillaTemporalModule, None] = None
         self.encoding_max_len = get_ad_temporal_position_encoding_max_len(mm_state_dict, mm_name)
         for c in (320, 640, 1280, 1280):
             self.down_blocks.append(MotionModule(c, temporal_position_encoding_max_len=self.encoding_max_len, block_type=BlockType.DOWN))
@@ -53,6 +54,7 @@ class AnimDiffMotionWrapper(GenericMotionWrapper):
         self.injector_version = InjectorVersion.V1_V2
         self.AD_video_length: int = 24
         self.loras = loras
+        self.enabled = True
     
     def has_loras(self):
         # TODO: fix this to return False if has an empty list as well
@@ -67,6 +69,15 @@ class AnimDiffMotionWrapper(GenericMotionWrapper):
             block.set_video_length(video_length)
         if self.mid_block is not None:
             self.mid_block.set_video_length(video_length)
+    
+    def set_enabled(self, enabled: bool):
+        self.enabled = enabled
+        for block in self.down_blocks:
+            block.set_enabled(enabled)
+        for block in self.up_blocks:
+            block.set_enabled(enabled)
+        if self.mid_block is not None:
+            self.mid_block.set_enabled(enabled)
 
 
 class MotionModule(nn.Module):
@@ -74,7 +85,7 @@ class MotionModule(nn.Module):
         super().__init__()
         if block_type == BlockType.MID:
             # mid blocks contain only a single VanillaTemporalModule
-            self.motion_modules = nn.ModuleList([get_motion_module(in_channels, temporal_position_encoding_max_len)])
+            self.motion_modules: Iterable[VanillaTemporalModule] = nn.ModuleList([get_motion_module(in_channels, temporal_position_encoding_max_len)])
         else:
             # down blocks contain two VanillaTemporalModules
             self.motion_modules = nn.ModuleList(
@@ -90,6 +101,10 @@ class MotionModule(nn.Module):
     def set_video_length(self, video_length: int):
         for motion_module in self.motion_modules:
             motion_module.set_video_length(video_length)
+    
+    def set_enabled(self, enabled: bool):
+        for motion_module in self.motion_modules:
+            motion_module.set_enabled(enabled)
 
 
 def get_motion_module(in_channels, temporal_position_encoding_max_len):
@@ -110,6 +125,7 @@ class VanillaTemporalModule(nn.Module):
         zero_initialize=True,
     ):
         super().__init__()
+        self.enabled = True
 
         self.temporal_transformer = TemporalTransformer3DModel(
             in_channels=in_channels,
@@ -131,9 +147,14 @@ class VanillaTemporalModule(nn.Module):
 
     def set_video_length(self, video_length: int):
         self.temporal_transformer.set_video_length(video_length)
+    
+    def set_enabled(self, enabled: bool):
+        self.enabled = enabled
 
     def forward(self, input_tensor, encoder_hidden_states=None, attention_mask=None):
-        return self.temporal_transformer(input_tensor, encoder_hidden_states, attention_mask)
+        if self.enabled:
+            return self.temporal_transformer(input_tensor, encoder_hidden_states, attention_mask)
+        return input_tensor
 
 
 class TemporalTransformer3DModel(nn.Module):

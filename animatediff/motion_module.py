@@ -71,6 +71,12 @@ def apply_lora_to_mm_state_dict(model_dict: dict[str, Tensor], lora: MotionLoRAW
         model_dict[model_key] += lora.info.strength * torch.mm(weight_up, weight_down).to(model_dict[model_key].device)
 
 
+def apply_strength_to_mm(model_dict: dict[str, Tensor], strength: float):
+    for key in model_dict:
+        if "pos_encoder.pe" in key:
+            model_dict[key] *= strength
+
+
 def load_motion_lora(lora_name: str) -> MotionLoRAWrapper:
     # if already loaded, return it
     lora_path = get_motion_lora_path(lora_name)
@@ -87,7 +93,7 @@ def load_motion_lora(lora_name: str) -> MotionLoRAWrapper:
     return lora
 
 
-def load_motion_module(model_name: str, motion_lora: MotionLoRAList = None, model: ModelPatcher = None) -> GenericMotionWrapper:
+def load_motion_module(model_name: str, motion_lora: MotionLoRAList = None, model: ModelPatcher = None, strength = 1.0) -> GenericMotionWrapper:
     # if already loaded, return it
     model_path = get_motion_model_path(model_name)
     model_hash = calculate_file_hash(model_path, hash_every_n=50)
@@ -111,6 +117,9 @@ def load_motion_module(model_name: str, motion_lora: MotionLoRAList = None, mode
 
     logger.info(f"Loading motion module {model_name}")
     mm_state_dict = load_torch_file(model_path)
+
+    if strength != 1.0:
+        apply_strength_to_mm(mm_state_dict, strength)
 
     # load lora state dicts if exist
     if len(loras) > 0:
@@ -371,6 +380,10 @@ class InjectionParams:
         self.context_overlap: int = None
         self.context_schedule: str = None
         self.closed_loop: bool = False
+        self.use_timestep_scheduling = False
+        self.shuffle_beta_schedule = False
+        self.pe_strength = 1.0
+        self.other_strength = 1.0
         self.version: str = None
         self.loras: MotionLoRAList = None
     
@@ -386,6 +399,21 @@ class InjectionParams:
     
     def set_loras(self, loras: MotionLoRAList):
         self.loras = loras.clone()
+    
+    def set_use_timestep_scheduling(self, use_timestep_scheduling: bool):
+        self.use_timestep_scheduling = use_timestep_scheduling
+    
+    def set_apply_mm_groupnorm_hack(self, apply_mm_groupnorm_hack: bool):
+        self.apply_mm_groupnorm_hack = apply_mm_groupnorm_hack
+    
+    def set_shuffle_beta_schedule(self, shuffle_beta_schedule: bool):
+        self.shuffle_beta_schedule = shuffle_beta_schedule
+    
+    def set_pe_strength(self, pe_strength: float):
+        self.pe_strength = pe_strength
+    
+    def set_other_strength(self, other_strength: float):
+        self.other_strength = other_strength
     
     def reset_context(self):
         self.context_length = None
@@ -405,6 +433,10 @@ class InjectionParams:
             context_overlap=self.context_overlap, context_schedule=self.context_schedule,
             closed_loop=self.closed_loop
             )
+        new_params.set_pe_strength(self.pe_strength)
+        new_params.set_other_strength(self.other_strength)
+        new_params.set_use_timestep_scheduling(self.use_timestep_scheduling)
+        new_params.set_shuffle_beta_schedule(self.shuffle_beta_schedule)
         if self.loras is not None:
             new_params.loras = self.loras.clone()
         return new_params

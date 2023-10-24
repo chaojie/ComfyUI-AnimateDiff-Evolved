@@ -66,6 +66,10 @@ class AnimateDiffLoaderWithContext:
                 "model_name": (get_available_motion_models(),),
                 "beta_schedule": (BetaSchedules.get_alias_list_with_first_element(BetaSchedules.SQRT_LINEAR),),
                 #"apply_mm_groupnorm_hack": ("BOOLEAN", {"default": True}),
+                "use_timestep_scheduling": ("BOOLEAN", {"default": False}),
+                "shuffle_beta_schedule": ("BOOLEAN", {"default": False}),
+                "pe_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
+                "other_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
             },
             "optional": {
                 "context_options": ("CONTEXT_OPTIONS",),
@@ -80,11 +84,11 @@ class AnimateDiffLoaderWithContext:
 
     def load_mm_and_inject_params(self,
         model: ModelPatcher,
-        model_name: str, beta_schedule: str,# apply_mm_groupnorm_hack: bool,
+        model_name: str, beta_schedule: str, use_timestep_scheduling: bool, shuffle_beta_schedule: bool, pe_strength: float, other_strength: float,# apply_mm_groupnorm_hack: bool,
         context_options: ContextOptions=None, motion_lora: MotionLoRAList=None,
     ):
         # load motion module
-        mm = load_motion_module(model_name, motion_lora, model=model)
+        mm = load_motion_module(model_name, motion_lora, model=model, strength=pe_strength)
         # set injection params
         injection_params = InjectionParams(
                 video_length=None,
@@ -94,6 +98,9 @@ class AnimateDiffLoaderWithContext:
                 injector=mm.injector_version,
                 model_name=model_name,
         )
+        injection_params.set_pe_strength(pe_strength)
+        injection_params.set_use_timestep_scheduling(use_timestep_scheduling)
+        injection_params.set_shuffle_beta_schedule(shuffle_beta_schedule)
         if context_options:
             # set context settings TODO: make this dynamic for future purposes
             if type(context_options) == UniformContextOptions:

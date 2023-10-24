@@ -75,6 +75,9 @@ class HotShotXLMotionWrapper(GenericMotionWrapper):
             block.set_video_length(video_length)
         if self.mid_block is not None:
             self.mid_block.set_video_length(video_length)
+    
+    def set_enabled(self, enabled: bool):
+        pass
         
 
 class HotShotXLMotionModule(nn.Module):

@@ -16,13 +16,14 @@ from model_patcher import ModelPatcher
 from comfy.ldm.modules.attention import SpatialTransformer
 import comfy.ldm.modules.diffusionmodules.openaimodel as openaimodel
 import comfy.model_management as model_management
+from sample import cleanup_additional_models, get_models_from_cond, prepare_sampling
 
 from .logger import logger
 
 from .motion_module_ad import VanillaTemporalModule
 from .motion_module import InjectionParams , eject_motion_module, inject_motion_module, inject_params_into_model, load_motion_module, unload_motion_module
 from .motion_module import is_injected_mm_params, get_injected_mm_params
-from .motion_utils import GroupNormAD
+from .motion_utils import GenericMotionWrapper, GroupNormAD
 from .context import get_context_scheduler
 from .model_utils import BetaScheduleCache, BetaSchedules, wrap_function_to_inject_xformers_bug_info
 
@@ -32,6 +33,7 @@ from .model_utils import BetaScheduleCache, BetaSchedules, wrap_function_to_inje
 # Global variable to use to more conveniently hack variable access into samplers
 class AnimateDiffHelper_GlobalState:
     def __init__(self):
+        self.motion_module = None
         self.reset()
     
     def reset(self):
@@ -45,6 +47,12 @@ class AnimateDiffHelper_GlobalState:
         self.context_overlap: int = None
         self.context_schedule: str = None
         self.closed_loop: bool = False
+        self.use_timestep_scheduling: bool = False
+        self.shuffle_beta_schedule: bool = False
+        if self.motion_module is not None:
+            # make sure reference is deleted to prevent memory shenanigans
+            del self.motion_module
+            self.motion_module = None
     
     def update_with_inject_params(self, params: InjectionParams):
         self.video_length = params.video_length
@@ -53,6 +61,11 @@ class AnimateDiffHelper_GlobalState:
         self.context_overlap = params.context_overlap
         self.context_schedule = params.context_schedule
         self.closed_loop = params.closed_loop
+        self.use_timestep_scheduling =  params.use_timestep_scheduling
+        self.shuffle_beta_schedule = params.shuffle_beta_schedule
+    
+    def update_with_motion_module(self, motion_module: GenericMotionWrapper):
+        self.motion_module = motion_module
 
     def is_using_sliding_context(self):
         return self.context_frames is not None
@@ -142,7 +155,8 @@ def animatediff_sample_factory(orig_comfy_sample: Callable) -> Callable:
             ##############################################
 
             # try to load motion module
-            motion_module = load_motion_module(params.model_name, params.loras, model=model)
+            motion_module = load_motion_module(params.model_name, params.loras, model=model, strength=params.pe_strength)
+            motion_module.set_enabled(True)
             # inject motion module into unet
             inject_motion_module(model=model, motion_module=motion_module, params=params)
 
@@ -152,6 +166,7 @@ def animatediff_sample_factory(orig_comfy_sample: Callable) -> Callable:
 
             # handle GLOBALSTATE vars and step tally
             ADGS.update_with_inject_params(params)
+            ADGS.update_with_motion_module(motion_module)
             ADGS.start_step = kwargs.get("start_step") or 0
             ADGS.current_step = ADGS.start_step
             ADGS.last_step = kwargs.get("last_step") or 0
@@ -162,9 +177,24 @@ def animatediff_sample_factory(orig_comfy_sample: Callable) -> Callable:
                     original_callback(step, x0, x, total_steps)
                 # update GLOBALSTATE for next iteration
                 ADGS.current_step = ADGS.start_step + step + 1
+                #ADGS.current_step%2==0 or
+                #ADGS.motion_module.set_enabled(ADGS.current_step > 15 or ADGS.current_step < 10)
+                if ADGS.use_timestep_scheduling:
+                    skipped_step = 10
+                    ADGS.motion_module.set_enabled(ADGS.current_step < skipped_step or ADGS.current_step > skipped_step)
+                    if ADGS.motion_module.is_enabled():
+                        model.model.register_schedule(given_betas=None, beta_schedule=beta_schedule, timesteps=1000, linear_start=0.00085, linear_end=0.012, cosine_s=8e-3)
+                    else:
+                        orig_beta_cache.use_cached_beta_schedule(model)
+                if ADGS.shuffle_beta_schedule:
+                    if ADGS.current_step%10==0:
+                        model.model.register_schedule(given_betas=None, beta_schedule=beta_schedule, timesteps=1000, linear_start=0.00085, linear_end=0.012, cosine_s=8e-3)
+                    else:
+                        orig_beta_cache.use_cached_beta_schedule(model)
+
             kwargs["callback"] = ad_callback
 
-            return wrap_function_to_inject_xformers_bug_info(orig_comfy_sample)(model, *args, **kwargs)
+            return wrap_function_to_inject_xformers_bug_info(animatediff_advanced_sample)(model, *args, **kwargs)
         finally:
             # attempt to eject motion module
             eject_motion_module(model=model)
@@ -185,6 +215,23 @@ def animatediff_sample_factory(orig_comfy_sample: Callable) -> Callable:
             ADGS.reset()
             ##############################################
     return animatediff_sample
+
+
+def animatediff_advanced_sample(model, noise, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=1.0, disable_noise=False, start_step=None, last_step=None, force_full_denoise=False, noise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
+    real_model, positive_copy, negative_copy, noise_mask, models = prepare_sampling(model, noise.shape, positive, negative, noise_mask)
+
+    noise = noise.to(model.load_device)
+    latent_image = latent_image.to(model.load_device)
+
+    # Goal: regenerate KSampler for each sampling step, and run sample just for that step
+    sampler = comfy_samplers.KSampler(real_model, steps=steps, device=model.load_device, sampler=sampler_name, scheduler=scheduler, denoise=denoise, model_options=model.model_options)
+    samples = sampler.sample(noise, positive_copy, negative_copy, cfg=cfg, latent_image=latent_image, start_step=start_step, last_step=last_step, force_full_denoise=force_full_denoise, denoise_mask=noise_mask, sigmas=sigmas, callback=callback, disable_pbar=disable_pbar, seed=seed)
+    
+    samples = samples.cpu()
+
+    cleanup_additional_models(models)
+    cleanup_additional_models(set(get_models_from_cond(positive, "control") + get_models_from_cond(negative, "control")))
+    return samples
 
 
 def sliding_sampling_function(model_function, x, timestep, uncond, cond, cond_scale, model_options={}, seed=None):

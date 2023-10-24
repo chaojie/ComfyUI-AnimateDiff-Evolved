@@ -78,6 +78,7 @@ class GenericMotionWrapper(nn.Module, ABC):
         self.injector_version = "VERYIMPORTANT_FILLTHISIN"
         self.AD_video_length: int = 0
         self.loras = loras
+        self.enabled = True
 
     def has_loras(self) -> bool:
         # TODO: fix this to return False if has an empty list as well
@@ -87,6 +88,15 @@ class GenericMotionWrapper(nn.Module, ABC):
     @abstractmethod
     def set_video_length(self, video_length: int):
         pass
+
+    @abstractmethod
+    def set_enabled(self, enabled: bool):
+        pass
+
+    def is_enabled(self) -> bool:
+        return self.enabled
+
+
 
 
 class GroupNormAD(torch.nn.GroupNorm):
