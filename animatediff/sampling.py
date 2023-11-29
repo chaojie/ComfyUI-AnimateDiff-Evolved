@@ -223,6 +223,12 @@ def animatediff_sample_factory(orig_comfy_sample: Callable) -> Callable:
 
             # apply suggested beta schedule (model_sampling)
             model.model.model_sampling = BetaSchedules.to_model_sampling(params.beta_schedule, model)
+            if params.beta_schedule == BetaSchedules.SDXL_TURBO:
+                steps: int = args[0]
+                timesteps = torch.flip(torch.arange(1, 11) * 100 - 1, (0,))[:steps]
+                sigmas = model.model.model_sampling.sigma(timesteps)
+                sigmas = torch.cat([sigmas, sigmas.new_zeros([1])])
+                pass
 
             # apply scale multiplier, if needed
             motion_module.set_scale_multiplier(params.motion_model_settings.attn_scale)

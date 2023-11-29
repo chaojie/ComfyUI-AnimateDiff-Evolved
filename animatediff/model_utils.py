@@ -9,6 +9,7 @@ import folder_paths
 from comfy.model_base import SDXL, BaseModel, model_sampling
 from comfy.model_management import xformers_enabled
 from comfy.model_patcher import ModelPatcher
+from model_sampling import ModelSamplingDiscrete
 
 
 class IsChangedHelper:
@@ -32,16 +33,20 @@ class BetaSchedules:
     SQRT_LINEAR = "sqrt_linear (AnimateDiff)"
     LINEAR_ADXL = "linear (AnimateDiff-SDXL)"
     LINEAR = "linear (HotshotXL/default)"
+    USE_EXISTING = "use existing"
+    SDXL_TURBO = "sdxl_turbo"
     SQRT = "sqrt"
     COSINE = "cosine"
     SQUAREDCOS_CAP_V2 = "squaredcos_cap_v2"
 
-    ALIAS_LIST = [SQRT_LINEAR, LINEAR_ADXL, LINEAR, SQRT, COSINE, SQUAREDCOS_CAP_V2]
+    ALIAS_LIST = [SQRT_LINEAR, LINEAR_ADXL, LINEAR, SDXL_TURBO, SQRT, COSINE, SQUAREDCOS_CAP_V2]
 
     ALIAS_MAP = {
         SQRT_LINEAR: "sqrt_linear",
         LINEAR_ADXL: "linear", # also linear, but has different linear_end (0.020)
         LINEAR: "linear",
+        USE_EXISTING: "use existing",
+        SDXL_TURBO: "linear",
         SQRT: "sqrt",
         COSINE: "cosine",
         SQUAREDCOS_CAP_V2: "squaredcos_cap_v2",
@@ -61,6 +66,8 @@ class BetaSchedules:
         if alias == cls.LINEAR_ADXL:
             # uses linear_end=0.020
             ms_obj._register_schedule(given_betas=None, beta_schedule=cls.to_name(alias), timesteps=1000, linear_start=0.00085, linear_end=0.020, cosine_s=8e-3)
+        elif alias == cls.USE_EXISTING:
+            return model.model.model_sampling
         return ms_obj
 
     @staticmethod
