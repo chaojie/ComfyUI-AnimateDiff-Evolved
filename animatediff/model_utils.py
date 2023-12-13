@@ -44,8 +44,6 @@ class BetaSchedules:
         SQRT_LINEAR: "sqrt_linear",
         LINEAR_ADXL: "linear", # also linear, but has different linear_end (0.020)
         LINEAR: "linear",
-        USE_PATCHED: None,
-        USE_ORIGINAL: None,
         SQRT: "sqrt",
         COSINE: "cosine",
         SQUAREDCOS_CAP_V2: "squaredcos_cap_v2",
@@ -92,6 +90,7 @@ class BetaScheduleCache:
 class Folders:
     ANIMATEDIFF_MODELS = "AnimateDiffEvolved_Models"
     MOTION_LORA = "AnimateDiffMotion_LoRA"
+    VIDEO_FORMATS = "AnimateDiffEvolved_video_formats"
 
 
 # register motion models folder(s)
@@ -112,9 +111,9 @@ folder_paths.folder_names_and_paths[Folders.MOTION_LORA] = (
 
 
 #Register video_formats folder
-folder_paths.folder_names_and_paths["video_formats"] = (
+folder_paths.folder_names_and_paths[Folders.VIDEO_FORMATS] = (
     [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "video_formats"),
+        str(Path(__file__).parent.parent / "video_formats")
     ],
     [".json"]
 )
